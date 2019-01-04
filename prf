@@ -1,0 +1,78 @@
+import numpy as np
+import os
+import cv2
+import matplotlib.pyplot as plt
+import PIL.Image as Image
+
+path1 = 'D:/luoyv/gan_map/test_val1/'
+path_gt = 'D:/luoyv/gan_map/DUTS/DUTS-TE/DUTS-TE-Mask/'
+
+#gan_map/test_val1/DUTS/DUTS-TE/DUTS-TE-Mask
+#ECSSD/train/mask
+#D:/luoyv/gan_map/test_val1/
+
+def get_FM(salpath, gtpath):
+
+
+    gtdir = gtpath
+    saldir = salpath
+
+    total_pre = 0
+    total_rec = 0
+
+    files = os.listdir(saldir)
+    eps = np.finfo(float).eps
+    it = 1
+    k = 0
+    name__ = []
+    for i, name in enumerate(files):
+        it += 1
+
+
+        if not os.path.exists(gtdir + name):
+            print(gtdir + name, 'does not exist')
+            #continue
+        gt = Image.open(gtdir + name)
+        gt = np.array(gt, dtype=np.uint8)
+
+        mask=Image.open(saldir+name).convert('L')
+        mask=mask.resize((np.shape(gt)[1],np.shape(gt)[0]))
+        mask = np.array(mask, dtype=np.float)
+
+        # salmap = cv2.resize(salmap,(W,H))
+
+        if len(mask.shape) != 2:
+            mask = mask[:, :, 0]
+        mask = (mask - mask.min()) / (mask.max() - mask.min() + eps)
+        gt[gt != 0] = 1
+
+        # threshold fm
+        binary = np.zeros(mask.shape)
+        th = 2*mask.mean()
+
+        if th > 1:
+            th = 1
+        binary[mask >= th] = 1
+
+        sb = (binary * gt).sum()
+        pre = sb / (binary.sum()+eps)
+        rec = sb / (gt.sum()+eps)
+        if rec == 0 and pre == 0:
+            name__.append(name)
+            #it -= 1
+
+        print('name' + str(name) + '  ' + 'rec' + str(rec) + '  ' + 'pre' + str(pre))
+
+        total_pre += pre
+        total_rec += rec
+
+    return total_pre, total_rec, it, name__
+
+if __name__ == '__main__':
+    pre, rec, t, name = get_FM(path1, path_gt)
+    pre /= t
+    rec /= t
+    f1 = (1.09 * pre * rec) / (0.09 * pre + rec)
+    print('pre ' + str(pre) + '  ' + 'rec ' + str(rec) + '  ' + 'f1 ' + str(f1))
+    print(name)
+    print(len(name))
