@@ -1,0 +1,145 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils import data as data_
+#from  gan_map_DHSnet import resnet101_map, Deconv, Net_conv
+from  model_1 import resnet101_map, Deconv, Net_conv
+from dataset_image import MyData, MyTestData
+import torch.nn as nn
+import torchvision.models as models
+from torch.autograd import Variable
+import torch.nn.functional as F
+from PIL import Image
+import numpy as np
+import os
+
+
+def train_model_map(num_epochs=50):
+
+    for epoch in range(num_epochs):
+        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+        print('-' * 10)
+
+        for i, (img, label_) in enumerate(dataloader):
+
+            inputs = img.to(device).float()
+            gt = label_.unsqueeze(1).to(device)
+            gt_128 = F.interpolate(gt, size=128, mode='bilinear')
+
+            feats = model_ft(inputs)
+            msk = deconv(feats[:3])
+            feats = feats[::-1]
+
+            msk = F.interpolate(msk, size=128, mode='bilinear')
+            msk = net(feats, msk, gt_128)
+
+            mask = F.interpolate(msk, size=256, mode='bilinear')
+
+            loss = criterion(mask, gt) + criterion(msk, gt_128)
+
+            deconv.zero_grad()
+            net.zero_grad()
+            model_ft.zero_grad()
+
+            loss.backward()
+
+            optimizer_net.step()
+            optimizer_deconv.step()
+            optimizer_feature.step()
+
+            print('loss: %.4f (epoch: %d, step: %d)' % (loss.item(), epoch, i))
+            del inputs, msk, gt, loss, feats, mask
+
+        torch.save(model_ft.state_dict(), checkoption + "./feat.pth")
+        torch.save(deconv.state_dict(), checkoption + "./deconv.pth")
+        torch.save(net.state_dict(), checkoption + "./net.pth")
+
+        test(Testloader, model_ft, deconv, net, output_dir1)
+
+    return model_ft
+
+def test(loader, feature, deconv, net, output_dir1):
+
+    for ib, (data, map, name, size) in enumerate(loader):
+
+        inputs = Variable(data).cuda()
+        map = map.unsqueeze(1).to(device)
+
+        feats = feature(inputs)
+        msk = deconv(feats[:3])
+        feats = feats[::-1]
+
+        msk = F.interpolate(msk, size=128, mode='bilinear')
+        map = F.interpolate(map, size=128, mode='bilinear')
+
+        msk = net(feats, msk, map)
+
+        msk = F.sigmoid(msk)
+        mak = F.interpolate(msk, size=(size[1], size[0]), mode='bilinear')
+
+        mask = mak.data[0, 0].cpu().numpy()
+        mask = (mask * 255)
+        mask = mask.astype(np.uint8)
+        mask = Image.fromarray(mask)
+        mask.save(os.path.join(output_dir1, name[0] + '.png'), 'png')
+
+    print('all save!')
+
+
+def load_pth_res(model_ft):
+
+    resnet101 = models.resnet101(pretrained=True)
+
+    pretrained_dict = resnet101.state_dict()
+    model_dict = model_ft.state_dict()
+
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    print(pretrained_dict.keys())
+    model_dict.update(pretrained_dict)
+    model_ft.load_state_dict(model_dict)
+
+    return model_ft
+
+
+if __name__ == '__main__':
+
+    data_dir = './DUTS/DUTS-TR/'
+    data_dir1 = './DUTS/DUTS-TE/'
+    piror = 'DUTS-TE-Image'
+    output_dir1 = './test_val1/'
+    checkoption = './parameters_wss/'
+
+    dataloader = data_.DataLoader(MyData(data_dir, transform=True),
+                                  batch_size=4, shuffle=True, num_workers=4)
+
+    Testloader = data_.DataLoader(MyTestData(data_dir1, piror),
+                                  batch_size=1, shuffle=False, num_workers=4)
+
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    model_ft = resnet101_map()
+    model_ft = load_pth_res(model_ft)
+    #model_ft.load_state_dict(torch.load('./parameters_wss/feat.pth'))
+    model_ft = model_ft.to(device)
+
+    deconv = Deconv()
+    #deconv.load_state_dict(torch.load('./parameters_wss/deconv.pth'))
+    deconv = deconv.to(device)
+
+    net = Net_conv()
+    #net.load_state_dict(torch.load('./parameters_wss/net.pth'))
+    net = net.to(device)
+
+    criterion = nn.BCEWithLogitsLoss()
+
+    optimizer_deconv = torch.optim.Adam(deconv.parameters(), lr=1e-3)
+    optimizer_feature = torch.optim.Adam(model_ft.parameters(), lr=1e-4)
+    optimizer_net = torch.optim.Adam(net.parameters(), lr=1e-4)
+
+    model_ft = train_model_map(num_epochs=30)
+
+    torch.save(model_ft.state_dict(), "./feat.pth")
+    torch.save(deconv.state_dict(), checkoption + "./deconv.pth")
+    torch.save(net.state_dict(), checkoption + "./net.pth")
+
+    print('model save')
